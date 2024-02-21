@@ -5,6 +5,10 @@ VisualStudioVersion = 17.8.34601.278
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "WisselAandrijving_2024", "WisselAandrijving_2024.vcxproj", "{B3A7556C-2E3B-405A-BF4A-4E6554BB9DD8}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "NmraDcc-master-2.0.8", "Libraries\NmraDcc-master\2.0.8\NmraDcc-master\NmraDcc-master-2.0.8.vcxitems", "{5B799187-D7E7-4159-8313-5D4497A925C2}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "EEPROM-2.0", "Libraries\EEPROM\2.0\EEPROM\EEPROM-2.0.vcxitems", "{A3C5353F-A1F1-4F5F-8EEC-A50144933D2D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|ARM = Debug|ARM
@@ -31,5 +35,11 @@ Global
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {36897050-EF32-4DA6-85E3-89234387AFC3}
+	EndGlobalSection
+	GlobalSection(SharedMSBuildProjectFiles) = preSolution
+		Libraries\NmraDcc-master\2.0.8\NmraDcc-master\NmraDcc-master-2.0.8.vcxitems*{5b799187-d7e7-4159-8313-5d4497a925c2}*SharedItemsImports = 9
+		Libraries\EEPROM\2.0\EEPROM\EEPROM-2.0.vcxitems*{a3c5353f-a1f1-4f5f-8eec-a50144933d2d}*SharedItemsImports = 9
+		Libraries\EEPROM\2.0\EEPROM\EEPROM-2.0.vcxitems*{b3a7556c-2e3b-405a-bf4a-4e6554bb9dd8}*SharedItemsImports = 4
+		Libraries\NmraDcc-master\2.0.8\NmraDcc-master\NmraDcc-master-2.0.8.vcxitems*{b3a7556c-2e3b-405a-bf4a-4e6554bb9dd8}*SharedItemsImports = 4
 	EndGlobalSection
 EndGlobal

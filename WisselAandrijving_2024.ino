@@ -26,17 +26,13 @@
 
  */
 
-
-
-
-
  //Libraries
 #include <EEPROM.h>
 #include <NmraDcc.h>
 
 
 //defines and constants
-
+const byte aantalkleuren = 7;
 
 //variables
 byte shiftbyte[3];
@@ -44,10 +40,18 @@ unsigned long slowtimer;
 byte stepcount[4];  //fase waarin een stepper staat
 byte lastswitch[2]; //0=switches, 1=home
 byte sws = 0;
-byte ledcount = 3;
-byte ledkleur[4]; //voor de 4 leds
+byte ledcount = 3; //in shift afgetelde led die dan de focus heeft, brandt bit3~bit7
+//bit 0~2 is de kleur bit0-rood, bit1=groen, bit2=blauw
+byte ledkleur[5]; //voor de 5 leds
+byte kleur=0;  //tijdelijk
 
-byte kleur=4;  //tijdelijk om met een knop een kleur te kunnen kiezen
+byte stepcoils[4]; //current spoelen aan/uit 0=stepper 1
+byte stepfase[4]; //was is de stepper aan het doen? 0=niks, wachten
+unsigned long stepeen[4]; //aantal steps positie 1
+unsigned long steptwee[4];//aantalsteps positie 2
+bool stepdir[4]; //richting waarin de stepper beweegt false=naar home (stephome) true = !stephome
+bool stephome[4]; //standaard richting naar homeswitch default false=linksom, true =rechtsom 
+byte steppos[4]; //current positie van deze stepper
 
 
 void setup() {
@@ -69,42 +73,36 @@ void setup() {
 }
 void INIT() {
 
-	for (byte i = 0; i < 4; i++) {
+	for (byte i = 0; i < 5; i++) {
 		ledkleur[i] = 0;
 	}
+	shiftbyte[0] = 0;	//bit0=s1A bit1=s1B bit2=s1C bit3=s1D   bit4=s2A bit5=s2B bit6=s2C bit7=s2D
+	shiftbyte[1] = 0;   //bit0=s3A bit1=s3B bit2=s3C bit3=s3D   bit4=s4A bit5=s4B bit6=s4C bit7=s4D
+	shiftbyte[2] = 7;
 }
 
 void loop() {
 	Shift();
-
+	Stepper_exe(); //800micros is maximale speed
 	//slowtimer
 	if (millis() - slowtimer > 20) {
 		slowtimer = millis();
 
-		//	Stepper_exe(); //800micros is maximale speed
+	
 		SW_exe();
-
 	}
 }
 
 
 void Shift() {
 
-	//leds om de beurt even aan
-	ledcount++; if (ledcount > 6)ledcount = 3; //bits 3~6
-
-	shiftbyte[0] = 7;//=B00000111  zet alle leds off , hier moet shiftbyte[2] worden 
-	shiftbyte[0] |= (1 << ledcount); //zet 1 led aan.
-
-	//if (ledcount == 3) {
-	//shiftbyte[0] &= ~(1 << 0);
-	//}
-
-	
+	ledcount++; if (ledcount > 7)ledcount = 3; //bits 3~6	//leds om de beurt even aan
+	shiftbyte[2] = 7;//=B00000111  zet alle leds off , hier moet shiftbyte[2] worden 
+	shiftbyte[2] |= (1 << ledcount); //zet 1 led aan.
+	//
 	Kleur(ledcount-3); //stel de kleur in voor deze led
 
-	//plaats
-	//  de shiftbytes in de schuifregisters
+	//plaats de shiftbytes in de schuifregisters
 	//d4=ser, d5=srclk d6=sclk
 	for (byte _byte = 2; _byte < 3; _byte--) {
 		for (byte _bit = 7; _bit < 8; _bit--) {
@@ -121,23 +119,30 @@ void Shift() {
 	PINB |= (1 << 0); PINB |= (1 << 0); //maak een puls op RCLK 'klok' de beide bytes in de schuif registers.
 }
 void Kleur(byte _led) {
-	//shiftbyte[0] |= (7 << 0); //zet 3 kleuren uit  0=rood 1=groen 2=blauw
-	
-
+	shiftbyte[2] |= (7 << 0); //zet 3 kleuren uit  0=rood 1=groen 2=blauw
 	switch (ledkleur[_led]) {
 	case 0: //zwart, uit
 		break;
 	case 1: //rood
-		shiftbyte[0] &= ~(1 << 0); 
+		shiftbyte[2] &= ~(1 << 0); 
 		break;
 	case 2: //groen
-		shiftbyte[0] &= ~(1 << 1);
+		shiftbyte[2] &= ~(1 << 1);
 		break;
 	case 3: //blauw
-		shiftbyte[0] &= ~(1 <<2);
+		shiftbyte[2] &= ~(1 <<2);
 		break;
-	case 4: //wit
-		shiftbyte[0] &= ~(7 << 0);
+	case 4: //geel
+		shiftbyte[2] &= ~(3 << 0);
+		break;
+	case 5: //lichtblauw
+		shiftbyte[2] &= ~(6 << 0);
+		break;
+	case 6: //purper
+		shiftbyte[2] &= ~(5 << 0);
+		break;
+	case 7: //wit
+		shiftbyte[2] &= ~(7 << 0);
 		break;
 	}
 }
@@ -171,31 +176,68 @@ void SW_exe() {
 	}
 }
 void SWon(byte _sw) {
-	//Serial.println(_sw);
+	Serial.println(_sw);
 	//0~3 homeswitches  4~8 switches
-	if (_sw > 3) { //switches
-		if (ledkleur[_sw - 4] == 0) {
-			ledkleur[_sw - 4] = kleur;
-		}
-		else {
-			ledkleur[_sw - 4] = 0;
-		}
-	}
-	else { //home
 		switch (_sw) {
 		case 0:
-			kleur++;
+			ledkleur[0] = 1;
 			break;
 		case 1:
-			kleur--;
+			ledkleur[0] = 2;
+			break;
+		case 2:
+			ledkleur[0] = 3;
+			break;
+		case 3:
+			ledkleur[0] = 4;
+			break;
+
+		case 4:
+			ledkleur[0] = kleur;
+			break;
+		case 5:
+			ledkleur[1] = kleur;
+			break;
+		case 6:
+			ledkleur[2] = kleur;
+			break;
+		case 7:
+			ledkleur[3] = kleur;
+			break;
+		case 8:
+			kleur++;
+			if (kleur > aantalkleuren)kleur = 0;
+			ledkleur[4] = kleur;
+			break;
+
+		}
+		//Serial.print("Kleur: "); Serial.println(kleur);
+	}
+
+void Stepper_exe() { 	
+
+	for (byte i = 0; i < 4; i++) { //om de beurt de 4 steppers
+
+		switch (stepfase[i]) {
+		case 0: //in rust 
+			break;
+		case 1: //doel omzetten en beweging starten richting home
+			steppos[i] ++;
+			if (steppos[i] > 2)steppos[i] = 1; //0>1 1>2 2>1
+			stepdir[i] = stephome[i];
+
+			break;
+		case 2:
 			break;
 		}
-		Serial.print("Kleur: "); Serial.println(kleur);
+
 	}
+
 }
 
-void Stepper_exe() {
 
+
+void Steps() {
 	shiftbyte[0] = 0;
 	stepcount[0]++;
 	byte _b = 0;

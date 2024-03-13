@@ -43,16 +43,19 @@ byte sws = 0;
 byte ledcount = 3; //in shift afgetelde led die dan de focus heeft, brandt bit3~bit7
 //bit 0~2 is de kleur bit0-rood, bit1=groen, bit2=blauw
 byte ledkleur[5]; //voor de 5 leds
-byte kleur=0;  //tijdelijk
+byte kleur = 0;  //tijdelijk
 
-byte stepcoils[4]; //current spoelen aan/uit 0=stepper 1
+//byte stepcoils[4]; //current spoelen aan/uit 0=stepper 1
 byte stepfase[4]; //was is de stepper aan het doen? 0=niks, wachten
-unsigned long stepeen[4]; //aantal steps positie 1
-unsigned long steptwee[4];//aantalsteps positie 2
+unsigned long steptarget[4][2]; //te bereiken doelen stepper~stand 1(0) stand 2(1)
 bool stepdir[4]; //richting waarin de stepper beweegt false=naar home (stephome) true = !stephome
 bool stephome[4]; //standaard richting naar homeswitch default false=linksom, true =rechtsom 
-byte steppos[4]; //current positie van deze stepper
-
+unsigned long steppos[0]; //current positie van deze stepper
+byte stepdoel[4]; //eindbestemming van de beweging
+unsigned long speedtime[4];  //counter voor aftellen wachten 
+byte speedfactor[4]; //eeprom; getoonde snelhieds waarde 1=minimaal 24=maximaal (bv..)
+unsigned int speed[4]; //ingestelde snelheid van de stepper
+unsigned long coilsuitcount[4]; //tijd na bereiken doel om de motor stroomloos te zetten
 
 void setup() {
 	Serial.begin(9600);
@@ -66,10 +69,34 @@ void setup() {
 	DDRC = 0; //portc PIns A# as inputs
 	PORTC = 0; //no pullups to port C
 
-
-	//temp&debug
-	//shiftbyte[0] = B00000111;
+	EepromRead();
 	INIT();
+}
+void EepromRead() {
+
+	for (byte i = 0; i < 4; i++) {
+		//data per stepper
+		speedfactor[i] = EEPROM.read(10 + 1); //10~13 
+		if (speedfactor[i] > 24)speedfactor[i] = 12;
+		speed[i] = speedfactor[i] * 50;   //tijdelijk deze waardes nog verder bepalen. nu default dus 600ms
+
+		//targets 
+		for (byte b = 0; b < 2; b++) {
+			unsigned int _default;
+			if (b == 0) {
+				_default = 50;
+			}
+			else {
+				_default = 500;
+			}
+			EEPROM.get(100 + (i * 20) + (b * 10), steptarget[i][b]);
+			if (steptarget[i][b] > 9999) steptarget[i][b] = _default;
+		}
+
+
+
+
+	}
 }
 void INIT() {
 
@@ -88,7 +115,7 @@ void loop() {
 	if (millis() - slowtimer > 20) {
 		slowtimer = millis();
 
-	
+
 		SW_exe();
 	}
 }
@@ -100,7 +127,7 @@ void Shift() {
 	shiftbyte[2] = 7;//=B00000111  zet alle leds off , hier moet shiftbyte[2] worden 
 	shiftbyte[2] |= (1 << ledcount); //zet 1 led aan.
 	//
-	Kleur(ledcount-3); //stel de kleur in voor deze led
+	Kleur(ledcount - 3); //stel de kleur in voor deze led
 
 	//plaats de shiftbytes in de schuifregisters
 	//d4=ser, d5=srclk d6=sclk
@@ -124,13 +151,13 @@ void Kleur(byte _led) {
 	case 0: //zwart, uit
 		break;
 	case 1: //rood
-		shiftbyte[2] &= ~(1 << 0); 
+		shiftbyte[2] &= ~(1 << 0);
 		break;
 	case 2: //groen
 		shiftbyte[2] &= ~(1 << 1);
 		break;
 	case 3: //blauw
-		shiftbyte[2] &= ~(1 <<2);
+		shiftbyte[2] &= ~(1 << 2);
 		break;
 	case 4: //geel
 		shiftbyte[2] &= ~(3 << 0);
@@ -157,7 +184,7 @@ void SW_exe() {
 	if (_changed > 0) { //niet nodig, maar 100x is er niks veranderd dus speeds up de boel
 		for (byte i = 0; i < 6; i++) {
 			if (_stand & (1 << i)) { //alleen indrukken van de knoppen iets mee doen
-				 SWon(i + (4 * sws));
+				SWon(i + (4 * sws));
 			}
 		}
 	}
@@ -178,98 +205,143 @@ void SW_exe() {
 void SWon(byte _sw) {
 	Serial.println(_sw);
 	//0~3 homeswitches  4~8 switches
-		switch (_sw) {
-		case 0:
-			ledkleur[0] = 1;
-			break;
-		case 1:
-			ledkleur[0] = 2;
-			break;
-		case 2:
-			ledkleur[0] = 3;
-			break;
-		case 3:
-			ledkleur[0] = 4;
-			break;
-
-		case 4:
-			ledkleur[0] = kleur;
-			break;
-		case 5:
-			ledkleur[1] = kleur;
-			break;
-		case 6:
-			ledkleur[2] = kleur;
-			break;
-		case 7:
-			ledkleur[3] = kleur;
-			break;
-		case 8:
-			kleur++;
-			if (kleur > aantalkleuren)kleur = 0;
-			ledkleur[4] = kleur;
-			break;
-
+	switch (_sw) {
+	case 0: //home 1
+		if (stepfase[0] == 1) { //opweg naar homeswitch
+			stepdir[0] = !stephome[0];
+			steppos[0] = 0; //reset positie stepper
+			stepfase[0] = 2;
 		}
-		//Serial.print("Kleur: "); Serial.println(kleur);
+		break;
+	case 1: //home 2
+
+		break;
+	case 2: //home 3
+
+		break;
+	case 3: //home 4
+
+		break;
+
+	case 4: //sw1
+		StepStart(0);
+		break;
+	case 5: //sw2
+		StepStart(1);
+		break;
+	case 6: //sw 3
+		StepStart(2);
+		break;
+	case 7:  //sw 4
+		StepStart(3);
+		break;
+	case 8: //sw program
+		kleur++;
+		if (kleur > aantalkleuren)kleur = 0;
+		ledkleur[4] = kleur;
+		break;
+
 	}
-
-void Stepper_exe() { 	
-
+	//Serial.print("Kleur: "); Serial.println(kleur);
+}
+void StepStart(byte _stepper) {
+	//start beweging van de stepper
+	stepfase[_stepper] = 1;
+	stepdir[_stepper] = stephome[_stepper]; //draairichting naar homeswitch
+	stepdoel[_stepper]++;
+	if (stepdoel[_stepper] > 2)stepdoel[_stepper] = 1; //0>1 1>2 2>1
+}
+void Stepper_exe() {
 	for (byte i = 0; i < 4; i++) { //om de beurt de 4 steppers
-
-		switch (stepfase[i]) {
-		case 0: //in rust 
-			break;
-		case 1: //doel omzetten en beweging starten richting home
-			steppos[i] ++;
-			if (steppos[i] > 2)steppos[i] = 1; //0>1 1>2 2>1
-			stepdir[i] = stephome[i];
-
-			break;
-		case 2:
-			break;
+		if (millis() - speedtime[i] > 500) {     // speed[i]) { //tijdelijk ff 
+			speedtime[i] = millis(); //snelheid van deze stepper
+			switch (stepfase[i]) {
+			case 0: //in rust 
+				break;
+			case 1: //opweg naar home
+				Steps(i);
+				break;
+			case 2: //opweg naar doel
+				Steps(i); //volgende stap, hierna testen of doel is bereikt.
+				if (steppos[i] >= steptarget[i][stepdoel[i]]) {
+					coilsuitcount[i] = millis();
+					stepfase[i] = 3;
+				}
+				break;
+			case 3: //doel bereikt wachttijd, daarna spoelen uit
+				if (millis() - coilsuitcount[i] > 500) {
+					CoilsUit(i);
+					stepfase[i] = 0; //ruststand
+				}
+				break;
+			}
 		}
+	}
+}
 
+
+void CoilsUit(byte _stepper) {
+
+}
+
+void Steps(byte _stepper) {
+	if (stepdir[_stepper]) { //richting homeswitch
+		stepcount[_stepper]--;
+		if (stepcount[_stepper] > 7)stepcount[_stepper] = 7;
+	}
+	else { //richting naar stepdoel
+		stepcount[_stepper]++;
+		if (stepcount[_stepper] > 7)stepcount[_stepper] = 0;
+	}
+	switch (_stepper) {
+	case 0:
+		Steps1();
+		break;
+	case 1:
+		Steps2();
+		break; //enz
 	}
 
 }
 
-
-
-void Steps() {
-	shiftbyte[0] = 0;
-	stepcount[0]++;
-	byte _b = 0;
-	if (stepcount[0] > 7)stepcount[0] = 0;
-
+void Steps1() {
+	//coils stepper 1 A=shiftbyte[0] bit0  B=shiftbyte[0] bit 1 C=sb0 bit2 D=sb0 bit3
+	shiftbyte[0] &= ~(B00001111 << 0); //reset bits 0~3
 	switch (stepcount[0]) {
 	case 0:
-		_b = 1;
+		shiftbyte[0] |= (1 << 0);  //0001
 		break;
 	case 1:
-		_b = 3;
+		shiftbyte[0] |= (3 << 0); //0011
 		break;
 	case 2:
-		_b = 2;
+		shiftbyte[0] |= (2 << 0); //0010
 		break;
 	case 3:
-		_b = 6;
+		shiftbyte[0] |= (6 << 0); //0110
 		break;
 	case 4:
-		_b = 4;
+		shiftbyte[0] |= (4 << 0); //0100
 		break;
 	case 5:
-		_b = 12;
+		shiftbyte[0] |= (12 << 0); //1100
 		break;
 	case 6:
-		_b = 8;
+		shiftbyte[0] |= (8 << 0); //1000
 		break;
 	case 7:
-		_b = 9;
+		shiftbyte[0] |= (9 << 0); //1001
 		break;
 	}
+	if (stepfase[0] == 2)steppos[0]++;
 
-	//in shiftbyte zetten
-	shiftbyte[0] |= (_b << 0);   //voor de tweede stepper dus _b<<4
+}
+void Steps2() {
+	//coils stepper 2 A=shiftbyte[0] bit4  B=shiftbyte[0] bit 5 C=sb0 bit6 D=sb0 bit7
+}
+void Steps3() {
+	//coils stepper 1 A=shiftbyte[1] bit0  B=shiftbyte[1] bit 1 C=sb1 bit2 D=sb1 bit3
+
+}void Steps4() {
+	//coils stepper 2 A=shiftbyte[1] bit4  B=shiftbyte[1] bit 5 C=sb1 bit6 D=sb1 bit7
 }

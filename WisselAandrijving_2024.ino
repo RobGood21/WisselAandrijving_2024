@@ -37,8 +37,12 @@ const byte aantalkleuren = 7;
 //variables
 byte shiftbyte[3];
 unsigned long slowtimer;
+byte programtype= 0;  //keuze programmeer type algemeen, of per stepper
+byte programfase = 0; 
+
+
 byte stepcount[4];  //fase waarin een stepper staat
-byte lastswitch[2]; //0=switches, 1=home
+byte lastswitch[2]; //0=homes, 1=switches
 byte sws = 0;
 byte ledcount = 3; //in shift afgetelde led die dan de focus heeft, brandt bit3~bit7
 //bit 0~2 is de kleur bit0-rood, bit1=groen, bit2=blauw
@@ -50,12 +54,16 @@ byte stepfase[4]; //was is de stepper aan het doen? 0=niks, wachten
 unsigned long steptarget[4][2]; //te bereiken doelen stepper~stand 1(0) stand 2(1)
 bool stepdir[4]; //richting waarin de stepper beweegt false=naar home (stephome) true = !stephome
 bool stephome[4]; //standaard richting naar homeswitch default false=linksom, true =rechtsom 
-unsigned long steppos[0]; //current positie van deze stepper
+unsigned long steppos[4]; //current positie van deze stepper
+byte stepstand[4]; //huidige stand van deze stepper 0=onbekend 1 of 2
 byte stepdoel[4]; //eindbestemming van de beweging
 unsigned long speedtime[4];  //counter voor aftellen wachten 
 byte speedfactor[4]; //eeprom; getoonde snelhieds waarde 1=minimaal 24=maximaal (bv..)
 unsigned int speed[4]; //ingestelde snelheid van de stepper
 unsigned long coilsuitcount[4]; //tijd na bereiken doel om de motor stroomloos te zetten
+
+byte steppercount;
+
 
 void setup() {
 	Serial.begin(9600);
@@ -84,25 +92,26 @@ void EepromRead() {
 		for (byte b = 0; b < 2; b++) {
 			unsigned int _default;
 			if (b == 0) {
-				_default = 50;
+				_default = 200;
 			}
 			else {
-				_default = 500;
+				_default = 2000;
 			}
 			EEPROM.get(100 + (i * 20) + (b * 10), steptarget[i][b]);
 			if (steptarget[i][b] > 9999) steptarget[i][b] = _default;
+
+			//Serial.print("target: "); Serial.print(steptarget[i][b]); Serial.print("   doel:"); Serial.println(b);
+
+
 		}
-
-
-
-
 	}
 }
 void INIT() {
 
-	for (byte i = 0; i < 5; i++) {
-		ledkleur[i] = 0;
+	for (byte i = 0; i < 4; i++) {
+		ledkleur[i] = 3; //blauw
 	}
+
 	shiftbyte[0] = 0;	//bit0=s1A bit1=s1B bit2=s1C bit3=s1D   bit4=s2A bit5=s2B bit6=s2C bit7=s2D
 	shiftbyte[1] = 0;   //bit0=s3A bit1=s3B bit2=s3C bit3=s3D   bit4=s4A bit5=s4B bit6=s4C bit7=s4D
 	shiftbyte[2] = 7;
@@ -110,12 +119,14 @@ void INIT() {
 
 void loop() {
 	Shift();
+
+	//steppercount++;
+	//if(steppercount==0) 
 	Stepper_exe(); //800micros is maximale speed
-	//slowtimer
+
+	//slowtimer definieren
 	if (millis() - slowtimer > 20) {
 		slowtimer = millis();
-
-
 		SW_exe();
 	}
 }
@@ -203,24 +214,20 @@ void SW_exe() {
 	}
 }
 void SWon(byte _sw) {
-	Serial.println(_sw);
+	//Serial.println(_sw);
 	//0~3 homeswitches  4~8 switches
 	switch (_sw) {
 	case 0: //home 1
-		if (stepfase[0] == 1) { //opweg naar homeswitch
-			stepdir[0] = !stephome[0];
-			steppos[0] = 0; //reset positie stepper
-			stepfase[0] = 2;
-		}
+		StepStop(0);
 		break;
 	case 1: //home 2
-
+		StepStop(1);
 		break;
 	case 2: //home 3
-
+		StepStop(2);
 		break;
 	case 3: //home 4
-
+		StepStop(3);
 		break;
 
 	case 4: //sw1
@@ -236,54 +243,116 @@ void SWon(byte _sw) {
 		StepStart(3);
 		break;
 	case 8: //sw program
-		kleur++;
-		if (kleur > aantalkleuren)kleur = 0;
-		ledkleur[4] = kleur;
+		Program_exe();
 		break;
 
 	}
 	//Serial.print("Kleur: "); Serial.println(kleur);
 }
+
+void Program_exe() {
+	programtype++;
+	if (programtype > 2)programtype = 0;
+	switch (programtype) {
+	case 0: //in bedrijf 
+		ledkleur[4] = 0;
+		break;
+	case 1: //instellingen per stepper
+		ledkleur[4] = 4;
+		break;
+	case 2: //algemene instellingen
+		ledkleur[4] = 6;
+		break;
+	}
+}
+
 void StepStart(byte _stepper) {
 	//start beweging van de stepper
+
+	ledkleur[_stepper] = 3;
+
+
+	//bepaal eindbestemming, hier nog iets doen met de switch mode, moment of aan/uit
+	stepstand[_stepper]++;
+	if (stepstand[_stepper] > 2)stepstand[_stepper] = 1; //0>1 1>2 2>1
+	//met lastswich bepalen of de home switch momenteel is ingedrukt, zoja dan draaien van de home switch af, anders de home switch gaan zoeken.
+	stepdoel[_stepper] = stepstand[_stepper] - 1;
 	stepfase[_stepper] = 1;
-	stepdir[_stepper] = stephome[_stepper]; //draairichting naar homeswitch
-	stepdoel[_stepper]++;
-	if (stepdoel[_stepper] > 2)stepdoel[_stepper] = 1; //0>1 1>2 2>1
+
+	if (lastswitch[0] & (1 << _stepper)) { //homeswitch is actief
+		StepStop(_stepper);
+	}
+	else { //homeswitch niet ingedrukt.
+		stepdir[_stepper] = stephome[_stepper]; //draairichting naar homeswitch		
+	}
+}
+void StepStop(byte _stepper) {
+
+	if (stepfase[_stepper] == 1) { //opweg naar homeswitch
+		stepdir[_stepper] = !stephome[_stepper];
+		//Serial.println("stop");
+		steppos[_stepper] = 0; //reset positie stepper
+		stepfase[_stepper] = 2;
+	}
 }
 void Stepper_exe() {
 	for (byte i = 0; i < 4; i++) { //om de beurt de 4 steppers
-		if (millis() - speedtime[i] > 500) {     // speed[i]) { //tijdelijk ff 
-			speedtime[i] = millis(); //snelheid van deze stepper
+
+		if (micros() - speedtime[i] > 2000) {     // speed[i]) { //tijdelijk ff 
+			speedtime[i] = micros(); //snelheid van deze stepper
+
 			switch (stepfase[i]) {
 			case 0: //in rust 
 				break;
 			case 1: //opweg naar home
 				Steps(i);
 				break;
+
 			case 2: //opweg naar doel
 				Steps(i); //volgende stap, hierna testen of doel is bereikt.
-				if (steppos[i] >= steptarget[i][stepdoel[i]]) {
+				if (steppos[i] > steptarget[i][stepdoel[i]]) { //steppos wordt verhoogd in Steps()
 					coilsuitcount[i] = millis();
 					stepfase[i] = 3;
 				}
 				break;
+
 			case 3: //doel bereikt wachttijd, daarna spoelen uit
 				if (millis() - coilsuitcount[i] > 500) {
 					CoilsUit(i);
 					stepfase[i] = 0; //ruststand
+					switch (stepstand[i]) {
+					case 0:
+						ledkleur[i] = 3;
+						break;
+					case 1:
+						ledkleur[i] = 1;
+						break;
+					case 2:
+						ledkleur[i] = 2;
+						break;
+					}
 				}
 				break;
 			}
 		}
 	}
 }
-
-
 void CoilsUit(byte _stepper) {
-
+	switch (_stepper) {
+	case 0:
+		shiftbyte[0] &= ~(B00001111 << 0);
+		break;
+	case 1:
+		shiftbyte[0] &= ~(B11110000 << 0);
+		break;
+	case 2:
+		shiftbyte[1] &= ~(B00001111 << 0);
+		break;
+	case 3:
+		shiftbyte[1] &= ~(B11110000 << 0);
+		break;
+	}
 }
-
 void Steps(byte _stepper) {
 	if (stepdir[_stepper]) { //richting homeswitch
 		stepcount[_stepper]--;
@@ -293,55 +362,137 @@ void Steps(byte _stepper) {
 		stepcount[_stepper]++;
 		if (stepcount[_stepper] > 7)stepcount[_stepper] = 0;
 	}
-	switch (_stepper) {
-	case 0:
-		Steps1();
-		break;
-	case 1:
-		Steps2();
-		break; //enz
-	}
+	Coils(_stepper);
 
+	if (stepfase[_stepper] == 2)steppos[_stepper]++;
 }
 
-void Steps1() {
-	//coils stepper 1 A=shiftbyte[0] bit0  B=shiftbyte[0] bit 1 C=sb0 bit2 D=sb0 bit3
-	shiftbyte[0] &= ~(B00001111 << 0); //reset bits 0~3
-	switch (stepcount[0]) {
+void Coils(byte _stepper) {
+	byte _bte = 0;
+	if (_stepper > 1)_bte = 1;
+	byte _nbbl = 0;
+	if (_stepper & (1 << 0))_nbbl = 4;
+	shiftbyte[_bte] &= ~(B00001111 << _nbbl); //reset bits 0~3
+
+	switch (stepcount[_stepper]) {
 	case 0:
-		shiftbyte[0] |= (1 << 0);  //0001
+		shiftbyte[_bte] |= (1 << _nbbl);  //0001
 		break;
 	case 1:
-		shiftbyte[0] |= (3 << 0); //0011
+		shiftbyte[_bte] |= (3 << _nbbl); //0011
 		break;
 	case 2:
-		shiftbyte[0] |= (2 << 0); //0010
+		shiftbyte[_bte] |= (2 << _nbbl); //0010
 		break;
 	case 3:
-		shiftbyte[0] |= (6 << 0); //0110
+		shiftbyte[_bte] |= (6 << _nbbl); //0110
 		break;
 	case 4:
-		shiftbyte[0] |= (4 << 0); //0100
+		shiftbyte[_bte] |= (4 << _nbbl); //0100
 		break;
 	case 5:
-		shiftbyte[0] |= (12 << 0); //1100
+		shiftbyte[_bte] |= (12 << _nbbl); //1100
 		break;
 	case 6:
-		shiftbyte[0] |= (8 << 0); //1000
+		shiftbyte[_bte] |= (8 << _nbbl); //1000
 		break;
 	case 7:
-		shiftbyte[0] |= (9 << 0); //1001
+		shiftbyte[_bte] |= (9 << _nbbl); //1001
 		break;
 	}
-	if (stepfase[0] == 2)steppos[0]++;
+}
 
-}
-void Steps2() {
-	//coils stepper 2 A=shiftbyte[0] bit4  B=shiftbyte[0] bit 5 C=sb0 bit6 D=sb0 bit7
-}
-void Steps3() {
-	//coils stepper 1 A=shiftbyte[1] bit0  B=shiftbyte[1] bit 1 C=sb1 bit2 D=sb1 bit3
-
-}void Steps4() {
-	//coils stepper 2 A=shiftbyte[1] bit4  B=shiftbyte[1] bit 5 C=sb1 bit6 D=sb1 bit7
-}
+//void Steps1() {
+//	//coils stepper 1 A=shiftbyte[0] bit0  B=shiftbyte[0] bit 1 C=sb0 bit2 D=sb0 bit3
+//	shiftbyte[0] &= ~(B00001111 << 0); //reset bits 0~3
+//	switch (stepcount[0]) {
+//	case 0:
+//		shiftbyte[0] |= (1 << 0);  //0001
+//		break;
+//	case 1:
+//		shiftbyte[0] |= (3 << 0); //0011
+//		break;
+//	case 2:
+//		shiftbyte[0] |= (2 << 0); //0010
+//		break;
+//	case 3:
+//		shiftbyte[0] |= (6 << 0); //0110
+//		break;
+//	case 4:
+//		shiftbyte[0] |= (4 << 0); //0100
+//		break;
+//	case 5:
+//		shiftbyte[0] |= (12 << 0); //1100
+//		break;
+//	case 6:
+//		shiftbyte[0] |= (8 << 0); //1000
+//		break;
+//	case 7:
+//		shiftbyte[0] |= (9 << 0); //1001
+//		break;
+//	}
+//
+//}
+//void Steps2() {
+//	//coils stepper 2 A=shiftbyte[0] bit4  B=shiftbyte[0] bit 5 C=sb0 bit6 D=sb0 bit7
+//	shiftbyte[0] &= ~(B11110000 << 0); //reset bits 4~7
+//	switch (stepcount[1]) {
+//	case 0:
+//		shiftbyte[0] |= (1 << 4);  //0001
+//		break;
+//	case 1:
+//		shiftbyte[0] |= (3 << 4); //0011
+//		break;
+//	case 2:
+//		shiftbyte[0] |= (2 << 4); //0010
+//		break;
+//	case 3:
+//		shiftbyte[0] |= (6 << 4); //0110
+//		break;
+//	case 4:
+//		shiftbyte[0] |= (4 << 4); //0100
+//		break;
+//	case 5:
+//		shiftbyte[0] |= (12 << 4); //1100
+//		break;
+//	case 6:
+//		shiftbyte[0] |= (8 << 4); //1000
+//		break;
+//	case 7:
+//		shiftbyte[0] |= (9 << 4); //1001
+//		break;
+//	}
+//}
+//void Steps3() {
+//	//coils stepper 1 A=shiftbyte[1] bit0  B=shiftbyte[1] bit 1 C=sb1 bit2 D=sb1 bit3
+//	shiftbyte[1] &= ~(B00001111 << 0); //reset bits 0~3
+//	switch (stepcount[2]) {
+//	case 0:
+//		shiftbyte[1] |= (1 << 0);  //0001
+//		break;
+//	case 1:
+//		shiftbyte[1] |= (3 << 0); //0011
+//		break;
+//	case 2:
+//		shiftbyte[1] |= (2 << 0); //0010
+//		break;
+//	case 3:
+//		shiftbyte[1] |= (6 << 0); //0110
+//		break;
+//	case 4:
+//		shiftbyte[1] |= (4 << 0); //0100
+//		break;
+//	case 5:
+//		shiftbyte[1] |= (12 << 0); //1100
+//		break;
+//	case 6:
+//		shiftbyte[1] |= (8 << 0); //1000
+//		break;
+//	case 7:
+//		shiftbyte[1] |= (9 << 0); //1001
+//		break;
+//	}
+//}
+//void Steps4() {
+//	//coils stepper 2 A=shiftbyte[1] bit4  B=shiftbyte[1] bit 5 C=sb1 bit6 D=sb1 bit7
+//}

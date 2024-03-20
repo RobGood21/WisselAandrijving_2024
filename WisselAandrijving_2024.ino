@@ -39,6 +39,8 @@ const byte aantalkleuren = 7;
 const byte aantaleffectcounts = 4;
 
 
+
+
 //variables
 unsigned int DCCadres = 1; //default=1;
 byte Invert[4];   //bit0=step, dus kleur van de led, bit1=invert het DCC command
@@ -50,10 +52,14 @@ byte programfase = 0;
 byte effects = 0; //led effecten
 byte effectcount[aantaleffectcounts]; //tellers voor de led effecten
 
+bool scroll = false; //scroll functie 
+byte scrollcount[2]; //0=switch 3(2) 1=switch 4(3)
 
 byte stepcount[4];  //fase waarin een stepper staat
 byte lastswitch[2]; //0=homes, 1=switches
+
 byte sws = 0;
+
 byte ledcount = 3; //in shift afgetelde led die dan de focus heeft, brandt bit3~bit7
 //bit 0~2 is de kleur bit0-rood, bit1=groen, bit2=blauw
 byte ledkleur[5]; //voor de 5 leds
@@ -96,6 +102,11 @@ void setup() {
 }
 void Eeprom_write() {
 	EEPROM.put(100, DCCadres);
+
+	for (byte i = 0; i < 4; i++) { //instellingen opslaan per stepper
+		EEPROM.put(200 + (i * 10), steptarget[i][0]);
+		EEPROM.put(200 + (i * 10) +5 , steptarget[i][1]);
+	}
 }
 void EepromRead() {
 	EEPROM.get(100, DCCadres);
@@ -120,8 +131,11 @@ void EepromRead() {
 			else {
 				_default = 2000;
 			}
-			EEPROM.get(100 + (i * 20) + (b * 10), steptarget[i][b]);
+			EEPROM.get(200 + (i * 10) + (b * 5), steptarget[i][b]);
+
+
 			if (steptarget[i][b] > 9999) steptarget[i][b] = _default;
+			Serial.println(steptarget[i][b], DEC);
 		}
 	}
 }
@@ -144,7 +158,7 @@ void loop() {
 	Stepper_exe(); //800micros is maximale speed
 
 	//slowtimer definieren
-	if (millis() - slowtimer > 20) {
+	if (millis() - slowtimer > 10) {
 		slowtimer = millis();
 		SW_exe();
 		if (effects > 0)LedEffect();
@@ -239,31 +253,70 @@ void Kleur(byte _led) {
 	}
 }
 void SW_exe() {
-	byte _stand = 0;
+	//byte _stand = 0;
 	byte _changed = 0;
-
-	_stand = PINC;
+	byte _stand = PINC;
 	_stand &= ~(192 << 0); //clear niet gebruikte bits 6 en 7
+
 	_changed = _stand ^ lastswitch[sws]; //is de stand veranderd
 
-	if (_changed > 0) { //niet nodig, maar 100x is er niks veranderd dus speeds up de boel
-		for (byte i = 0; i < 6; i++) {
+	for (byte i = 0; i < 6; i++) {
+
+		byte _switch = i + (4 * sws);
+
+		if (_changed & (1 << i)) {
+
+			//Serial.println(lastswitch[sws]);
+
+
 			if (_stand & (1 << i)) { //alleen indrukken van de knoppen iets mee doen
-				SWon(i + (4 * sws));
+				SWon(_switch);
+			}
+			else
+			{ //loslaten van een knop
+				SWoff(_switch);
+			}
+		}
+		//scroll functie alleen eventueel op knop 3 en 4 
+		if (scroll == true && (_stand & (1 << i))) {
+			switch (_switch) {
+			case 6: //knop 3
+				if (scrollcount[0] < 20) {
+					scrollcount[0]++;
+				}
+				else {
+					SWon(6);
+				}
+				break;
+			case 7: //knop 4;
+				if (scrollcount[1] < 20) {
+					scrollcount[1]++;
+				}
+				else {
+					SWon(7);
+				}
+				break;
 			}
 		}
 	}
+
 	lastswitch[sws] = _stand; //onthouden laatste stand
 
 	//instellen volgende lees cyclus
 	sws++; if (sws > 1)sws = 0;
-	if (sws == 1) { //read switch
-		PORTD |= (1 << 7);
-		PORTD &= ~(1 << 6);
 
+	if (sws == 1) { //read switch
+		DDRD |= (1 << 7); //pin 7 als output
+		PORTD |= (1 << 7);
+
+		DDRD &= ~(1 << 6);  //pin 6 input H-Z
+		PORTD &= ~(1 << 6);
 	}
 	else { //read home 
+		DDRD |= (1 << 6); //pin6 als output hoog
 		PORTD |= (1 << 6);
+
+		DDRD &= ~(1 << 7); //pin6 als input H-z
 		PORTD &= ~(1 << 7);
 	}
 }
@@ -303,6 +356,9 @@ void SWon(byte _sw) {
 	}
 
 }
+void SWoff(byte _sw) {
+	if (_sw == 6) scrollcount[0] = 0; if (_sw == 7)scrollcount[1] = 0;
+}
 void LedEffect() {
 	switch (effects) {
 	case 1: //Wacht op DCC adres om in te stellen
@@ -321,7 +377,7 @@ void LedEffect() {
 	case 3: //stepperinstelling start, gekozen stepper animatie
 
 		effectcount[0]++;
-		if (effectcount[0] > 5) {
+		if (effectcount[0] > 10) {
 			effectcount[0] = 0;
 			effectcount[1] ^= (1 << 0); //toggle bit 1
 			if (effectcount[1] & (1 << 0)) {
@@ -439,17 +495,25 @@ void Prg_stepper(byte _knop) {
 		case 1: //knop2: stand aanpassen
 			ledkleur[2] = 0; ledkleur[3] = 0;
 			stepreg |= (1 << 0); //busy, motor draait
+			scroll = false;
 			StepStart(stepprogram, 0);
 			break;
 		case 2: //knop3: positie stepper verlagen richting home
-			if (!stepreg & (1 << 0)) { //alleen als busy bit0 is false
-				Serial.println("jo, nu mag het");
+			if (!stepreg & (1 << 0)) { //alleen als busy bit0 is false			
+				stepdir[stepprogram] = stephome[stepprogram]; //draaien naar de home switch
+				Steps(stepprogram);			
+					steptarget[stepprogram][stepstand[stepprogram]-1]--; //stepstand=0,1 of 2 0=hier niet meer mogelijk
+			
+
+
 			}
 			break;
 
 		case 3://knop4: positie stepper verhogen van home vandaan
 			if (!stepreg & (1 << 0)) {
-				Serial.println("hier mag ut ook");
+				stepdir[stepprogram] = !stephome[stepprogram]; //draaien van de homeswitch af
+				Steps(stepprogram);
+				steptarget[stepprogram][stepstand[stepprogram]-1]++;
 			}
 			break;
 		}
@@ -523,7 +587,8 @@ void ProgramfaseSet(byte _fase) {
 		byte _stand = stepstand[stepprogram];
 		if (_stand > 0) {
 			ledkleur[2] = 5; ledkleur[3] = 5;
-			stepreg &= ~(1 << 0);
+			stepreg &= ~(1 << 0); //motor niet busy
+			scroll = true; //scrollen knop 3 en 4 toestaan
 		}
 		else {
 			stepreg |= (1 << 0); //geen stand dus posities niet in te stellen
@@ -551,6 +616,7 @@ void StepStart(byte _stepper, byte _stand) {
 	//start beweging van de stepper	
 	if (programtype == 0) ledkleur[_stepper] = 3; //alleen als in bedrijf
 	//bepaal eindbestemming, hier nog iets doen met de switch mode, moment of aan/uit	
+	
 	if (_stand == 0) {
 		stepstand[_stepper]++;
 		if (stepstand[_stepper] > 2)stepstand[_stepper] = 1; //0>1 1>2 2>1	
@@ -558,8 +624,8 @@ void StepStart(byte _stepper, byte _stand) {
 	else {
 		stepstand[_stepper] = _stand;
 	}
-	//met lastswich bepalen of de home switch momenteel is ingedrukt, zoja dan draaien van de home switch af, anders de home switch gaan zoeken.
 
+	//met lastswich bepalen of de home switch momenteel is ingedrukt, zoja dan draaien van de home switch af, anders de home switch gaan zoeken.
 	stepdoel[_stepper] = stepstand[_stepper] - 1;
 	stepfase[_stepper] = 1;
 
@@ -649,6 +715,7 @@ void Steps(byte _stepper) {
 		stepcount[_stepper]++;
 		if (stepcount[_stepper] > 7)stepcount[_stepper] = 0;
 	}
+
 	Coils(_stepper);
 
 	if (stepfase[_stepper] == 2)steppos[_stepper]++;

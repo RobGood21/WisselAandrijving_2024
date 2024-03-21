@@ -100,12 +100,24 @@ void setup() {
 	EepromRead();
 	INIT();
 }
+void Factory() {
+
+	Serial.println("factory");
+	for (int i = 0; i < EEPROM.length(); i++) {
+		EEPROM.update(i, 0xFF);
+	}
+	setup();
+}
 void Eeprom_write() {
 	EEPROM.put(100, DCCadres);
 
 	for (byte i = 0; i < 4; i++) { //instellingen opslaan per stepper
 		EEPROM.put(200 + (i * 10), steptarget[i][0]);
-		EEPROM.put(200 + (i * 10) +5 , steptarget[i][1]);
+		EEPROM.put(200 + (i * 10) + 5, steptarget[i][1]);
+
+		EEPROM.update(10 + i, speedfactor[i]);
+
+
 	}
 }
 void EepromRead() {
@@ -118,9 +130,8 @@ void EepromRead() {
 		Invert[i] = EEPROM.read(15 + i);
 		if (Invert[i] == 0xFF)Invert[i] = 0; //bit0 kleur invert, bit1=dcc invert
 
-		speedfactor[i] = EEPROM.read(10 + 1); //10~13 
-		if (speedfactor[i] > 24)speedfactor[i] = 12;
-		speed[i] = speedfactor[i] * 50;   //tijdelijk deze waardes nog verder bepalen. nu default dus 600ms
+		speedfactor[i] = EEPROM.read(10 + i); //10~13 
+		StepperSpeed(i);
 
 		//targets 
 		for (byte b = 0; b < 2; b++) {
@@ -135,7 +146,7 @@ void EepromRead() {
 
 
 			if (steptarget[i][b] > 9999) steptarget[i][b] = _default;
-			Serial.println(steptarget[i][b], DEC);
+			//Serial.println(steptarget[i][b], DEC);
 		}
 	}
 }
@@ -143,11 +154,20 @@ void INIT() {
 
 	for (byte i = 0; i < 4; i++) {
 		ledkleur[i] = 3; //blauw
+		stepstand[i] = 0;
 	}
+	ledkleur[4] = 0;
 
 	shiftbyte[0] = 0;	//bit0=s1A bit1=s1B bit2=s1C bit3=s1D   bit4=s2A bit5=s2B bit6=s2C bit7=s2D
 	shiftbyte[1] = 0;   //bit0=s3A bit1=s3B bit2=s3C bit3=s3D   bit4=s4A bit5=s4B bit6=s4C bit7=s4D
 	shiftbyte[2] = 7;
+
+	effects = 0;
+	stepreg = 0;
+	programtype = 0;
+	programfase = 0;
+
+
 }
 void loop() {
 	Dcc.process();
@@ -359,6 +379,11 @@ void SWon(byte _sw) {
 void SWoff(byte _sw) {
 	if (_sw == 6) scrollcount[0] = 0; if (_sw == 7)scrollcount[1] = 0;
 }
+
+void StepperSpeed(byte _stepper) {
+	if (speedfactor[_stepper] > 200)speedfactor[_stepper] = 12;
+	speed[_stepper] = 800 + (speedfactor[_stepper] * 100);   //tijdelijk deze waardes nog verder bepalen. nu default dus 600ms
+}
 void LedEffect() {
 	switch (effects) {
 	case 1: //Wacht op DCC adres om in te stellen
@@ -396,13 +421,61 @@ void LedEffect() {
 		EffectCountClear();
 		effects = 5;
 		break;
+
 	case 5: //instellen eerste programmeer fase instellingen stepper posities
 		//led1 welke instelling lichtblauw voor posities
 		programfase = 1;
-		ProgramfaseSet(30);
+		ledkleur[0] = 4;
+		ProgramfaseSet(40);
 		effects = 0; //effecten stoppen	
 		break;
 
+	case 6: //stepper instelling speed knipper effect op speed snelheid
+		effectcount[0]++;
+		if (effectcount[0] > 2 * speedfactor[stepprogram]) {
+			effectcount[0] = 0;
+			stepreg ^= (1 << 1); //toggle bit 1
+			if (stepreg & (1 << 1)) {
+				ledkleur[2] = 5; ledkleur[3] = 0;
+			}
+			else {
+				ledkleur[2] = 0; ledkleur[3] = 5;
+			}
+		}
+		break;
+
+	case 50: //Factory reset knipper effect op led 4 
+		effectcount[0] = 0;
+		effects = 51;
+		break;
+	case 51:
+		byte _led = 3;
+		effectcount[0]++;
+		if (effectcount[0] > 10) {
+			effectcount[0] = 0;
+			stepreg ^= (1 << 2);
+
+			if (stepreg & (1 << 3)) { //extra confirmation if true door naar factory reset, false wissel led
+				_led = 2;
+			}
+
+			if (stepreg & (1 << 2)) {
+				ledkleur[_led] = 1;
+			}
+			else {
+				ledkleur[_led] = 4;
+			}
+		}
+		break;
+
+	case 100:
+		effectcount[3]++;
+		if (effectcount[3] > 40) {
+			effectcount == 0;
+			effects = 0;
+			CoilsUit(stepprogram);
+		}
+		break;
 	}
 }
 void Sw_program() {
@@ -418,19 +491,6 @@ void Sw_program() {
 
 		for (byte i = 0; i < 4; i++) { //kleuren leds herstellen
 			StandLed(i);
-			//switch (stepstand[i]) {
-			//case 0:
-			//	ledkleur[i] = 3;
-			//	break;
-			//case 1:
-			//	ledkleur[i] = 2;
-			//	if (Invert[i] & (1 << 0))  ledkleur[i] = 1;
-			//	break;
-			//case 2:
-			//	ledkleur[i] = 1;
-			//	if (Invert[i] & (1 << 0))ledkleur[i] = 2;
-			//	break;
-			//}
 		}
 
 		break;
@@ -480,46 +540,76 @@ void StandLed(byte _stepper) {
 
 void Prg_stepper(byte _knop) {
 	switch (programfase) {
-	case 0: //kies in te stellen stepper			
+	case 0: //**********************************kies in te stellen stepper			
 		stepprogram = _knop;
 		LedsAll(0); //alle leds uit.
 		EffectCountClear();
 		effects = 3;
-		//StandLed(stepprogram); //gekozen led stand tonen 
 		break;
-	case 1:
-		//nu ingesteld op instellen posities
+
+	case 1: //************************************Instellen posities
 		switch (_knop) {
 		case 0: //knop1: volgende programmeerfase
+			programfase = 2;
+			//instellingen voor programfase 2
+			ledkleur[0] = 2; //groen
+			effects = 6; //knipper effect op led 3 en 4 
+			EffectCountClear(); //reset tellers
 			break;
 		case 1: //knop2: stand aanpassen
-			ledkleur[2] = 0; ledkleur[3] = 0;
-			stepreg |= (1 << 0); //busy, motor draait
-			scroll = false;
-			StepStart(stepprogram, 0);
+			ProgramfaseSet(25);
 			break;
 		case 2: //knop3: positie stepper verlagen richting home
 			if (!stepreg & (1 << 0)) { //alleen als busy bit0 is false			
 				stepdir[stepprogram] = stephome[stepprogram]; //draaien naar de home switch
-				Steps(stepprogram);			
-					steptarget[stepprogram][stepstand[stepprogram]-1]--; //stepstand=0,1 of 2 0=hier niet meer mogelijk
-			
-
-
+				Steps(stepprogram);
+				steptarget[stepprogram][stepstand[stepprogram] - 1]--; //stepstand=0,1 of 2 0=hier niet meer mogelijk
+				effects = 100; //schakeld spoelen weer uit.
+				effectcount[3] = 0;
 			}
 			break;
-
 		case 3://knop4: positie stepper verhogen van home vandaan
 			if (!stepreg & (1 << 0)) {
 				stepdir[stepprogram] = !stephome[stepprogram]; //draaien van de homeswitch af
 				Steps(stepprogram);
-				steptarget[stepprogram][stepstand[stepprogram]-1]++;
+				steptarget[stepprogram][stepstand[stepprogram] - 1]++;
+				effects = 100;
+				effectcount[3] = 0;
 			}
 			break;
 		}
 		break;
+	case 2: //*****************************Instellen speed stepper
+		switch (_knop) {
+		case 0:
+			programfase = 3;
+			//instellen programfase 3
+			
+			effects = 0;
+			EffectCountClear();
+			ledkleur[0] = 6; //paars			
+			ProgramfaseSet(26); //leds instellen			
+			break;
+
+		case 1:
+			ProgramfaseSet(25); //zet stand en positie stepper om
+			break;
+		case 2:
+			if (speedfactor[stepprogram] < 50) speedfactor[stepprogram]++;
+			StepperSpeed(stepprogram);
+			break;
+		case 3:
+			if (speedfactor[stepprogram] > 1) speedfactor[stepprogram]--;
+			StepperSpeed(stepprogram);
+			break;
+		}
+
+	case 3: //***************************instellen richtingen
+
+		break;
 	}
 }
+
 void Prg_Algemeen(byte _knop) {
 
 	switch (programfase) {
@@ -543,7 +633,7 @@ void Prg_Algemeen(byte _knop) {
 		}
 		break;
 		//***************************programtype algemeen programfase 1
-	case 1:  //programfase 1: ??
+	case 1:  //programfase 1: instellen DCCadres
 		switch (_knop) {
 		case 0: //knop: 1
 			programfase = 2;
@@ -558,11 +648,23 @@ void Prg_Algemeen(byte _knop) {
 		}
 		break;
 		//***************************programtype algemeen programfase 2 volgende instelling
-	case 2: //programfase 2:??
+	case 2: //programfase 2: Factory reset
 		switch (_knop) {
 		case 0: //knop:1
 			programfase = 0;
+			effects = 0;
+			stepreg &= ~(1 << 3); //reset bit wat vraagt om bevestiging
 			ProgramfaseSet(20);
+			break;
+		case 2: //knop1
+			if (stepreg & (1 << 3)) {
+
+				Factory();
+			}
+			break;
+		case 3: //knop 4: vraag om bevestiging  voor factory reset.
+			ledkleur[3] = 0;
+			stepreg |= (1 << 3);
 			break;
 		}
 		break;
@@ -570,21 +672,40 @@ void Prg_Algemeen(byte _knop) {
 
 }
 void ProgramfaseSet(byte _fase) {
+
 	//set diverse led kleuren combies en instellingen op een bepaald moment in het programmeer proces.
 	switch (_fase) {
+
 	case 20: //program algemeen DCC instellen start
 		ledkleur[4] = 6;
 		ledkleur[0] = 6; ledkleur[1] = 1; ledkleur[2] = 0; ledkleur[3] = 0;
 		break;
+
 	case 21:
 		ledkleur[0] = 4; ledkleur[1] = 0; ledkleur[2] = 0; ledkleur[3] = 0;
 		break;
-	case 22:
-		ledkleur[0] = 7; ledkleur[1] = 0; ledkleur[2] = 0; ledkleur[3] = 0;
+
+	case 22: //factory reset instellen
+		ledkleur[0] = 1; ledkleur[1] = 0; ledkleur[2] = 0; ledkleur[3] = 0;
+		effects = 50; //knippereffect op led 4
 		break;
-	case 30: //instellen posities stepper
-		ledkleur[0] = 4;
+
+	case 25: //in stepper instellingen stand omzetten en stepper verplaatsen
+		ledkleur[2] = 0; ledkleur[3] = 0;
+		stepreg |= (1 << 0); //busy, motor draait
+		scroll = false;
+		StepStart(stepprogram, 0);
+		break;
+	
+	case 26: //richtingen tonen
+		Serial.println(" case 40");
+
+		ledkleur[1] = 2; ledkleur[2] = 2; ledkleur[3] = 2;		 
+		break;
+
+	case 40: //instellen posities stepper**********************************
 		byte _stand = stepstand[stepprogram];
+		
 		if (_stand > 0) {
 			ledkleur[2] = 5; ledkleur[3] = 5;
 			stepreg &= ~(1 << 0); //motor niet busy
@@ -593,8 +714,6 @@ void ProgramfaseSet(byte _fase) {
 		else {
 			stepreg |= (1 << 0); //geen stand dus posities niet in te stellen
 		}
-
-		//INvert moet hier nog bij komen???
 
 		switch (_stand) {
 		case 0:
@@ -607,8 +726,8 @@ void ProgramfaseSet(byte _fase) {
 			ledkleur[1] = 1;
 			break;
 		}
-		break;
 
+		break;
 	}
 }
 
@@ -616,7 +735,7 @@ void StepStart(byte _stepper, byte _stand) {
 	//start beweging van de stepper	
 	if (programtype == 0) ledkleur[_stepper] = 3; //alleen als in bedrijf
 	//bepaal eindbestemming, hier nog iets doen met de switch mode, moment of aan/uit	
-	
+
 	if (_stand == 0) {
 		stepstand[_stepper]++;
 		if (stepstand[_stepper] > 2)stepstand[_stepper] = 1; //0>1 1>2 2>1	
@@ -648,7 +767,7 @@ void StepStop(byte _stepper) {
 void Stepper_exe() {
 	for (byte i = 0; i < 4; i++) { //om de beurt de 4 steppers
 
-		if (micros() - speedtime[i] > 2000) {     // speed[i]) { //tijdelijk ff 
+		if (micros() - speedtime[i] > speed[i]) {     // speed[i]) { //tijdelijk ff 
 			speedtime[i] = micros(); //snelheid van deze stepper
 
 			switch (stepfase[i]) {
@@ -674,14 +793,20 @@ void Stepper_exe() {
 					case 0: //in bedrijf
 						StandLed(i);
 						break;
-					case 1: //instellingen per stepper
+					case 1: //*****************instellingen per stepper
 						switch (programfase) {
 						case 1: //instellen posities van een stepper
-							ProgramfaseSet(30); //zet de juiste led op de juiste kleur							
+							ProgramfaseSet(40); //zet de juiste led op de juiste kleur							
+							break;
+						case 2: //instellen snelheid, speed van de stepper
+							//effects = 6;
+							ProgramfaseSet(40);
 							break;
 						}
 						break;
-					case 2: //algemene instellingen
+
+
+					case 2: //******************algemene instellingen
 						break;
 					}
 				}

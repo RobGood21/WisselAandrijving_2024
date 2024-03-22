@@ -43,7 +43,7 @@ const byte aantaleffectcounts = 4;
 
 //variables
 unsigned int DCCadres = 1; //default=1;
-byte Invert[4];   //bit0=step, dus kleur van de led, bit1=invert het DCC command
+byte Invert[4];   //bit0=step, dus kleur van de led, bit1=invert het DCC command bit2=homerichting bit 3=auto sequence of auto single
 byte stepreg; //8xbool bit0 (true)=busy, motor draait naar andere positie
 byte shiftbyte[3];
 unsigned long slowtimer;
@@ -65,11 +65,10 @@ byte ledcount = 3; //in shift afgetelde led die dan de focus heeft, brandt bit3~
 byte ledkleur[5]; //voor de 5 leds
 byte kleur = 0;  //tijdelijk
 
-//byte stepcoils[4]; //current spoelen aan/uit 0=stepper 1
 byte stepfase[4]; //was is de stepper aan het doen? 0=niks, wachten
 unsigned long steptarget[4][2]; //te bereiken doelen stepper~stand 1(0) stand 2(1)
 bool stepdir[4]; //richting waarin de stepper beweegt false=naar home (stephome) true = !stephome
-bool stephome[4]; //standaard richting naar homeswitch default false=linksom, true =rechtsom 
+//bool stephome[4]; //standaard richting naar homeswitch default false=linksom, true =rechtsom 
 unsigned long steppos[4]; //current positie van deze stepper
 byte stepstand[4]; //huidige stand van deze stepper 0=onbekend 1 of 2
 byte stepdoel[4]; //eindbestemming van de beweging
@@ -81,6 +80,12 @@ unsigned long coilsuitcount[4]; //tijd na bereiken doel om de motor stroomloos t
 byte steppercount;
 byte stepprogram; //welke stepper wordt er ingesteld
 
+byte stepauto[4]; //auto step type 0=uit 1=heen en weer 2= alleen weer
+byte autotimefactor[4]; //bepaald de wacht tijd van het autoeffect
+//sequence of single is Invert bit3
+unsigned long autotimer; //timer van 1 seconde
+unsigned int autocounter[4]; //tellers voor de wachttijden
+byte autofocus; //welke van de 4 steppers heeft de focus in de sequence mode
 
 
 
@@ -112,7 +117,10 @@ void Eeprom_write() {
 	EEPROM.put(100, DCCadres);
 
 	for (byte i = 0; i < 4; i++) { //instellingen opslaan per stepper
-		EEPROM.put(200 + (i * 10), steptarget[i][0]);
+
+		EEPROM.update(15 + i, Invert[i]);
+		EEPROM.update(20 + i, stepauto[i]);
+		EEPROM.update(25 + i, autotimefactor[i]);
 		EEPROM.put(200 + (i * 10) + 5, steptarget[i][1]);
 
 		EEPROM.update(10 + i, speedfactor[i]);
@@ -130,6 +138,12 @@ void EepromRead() {
 		Invert[i] = EEPROM.read(15 + i);
 		if (Invert[i] == 0xFF)Invert[i] = 0; //bit0 kleur invert, bit1=dcc invert
 
+		stepauto[i] = EEPROM.read(20 + i);
+		if (stepauto[i] == 0xFF)stepauto[i] = 0;
+
+		autotimefactor[i] = EEPROM.read(25 + i);
+		if (autotimefactor[i] == 0xFF)autotimefactor[i] = 0; //is random
+
 		speedfactor[i] = EEPROM.read(10 + i); //10~13 
 		StepperSpeed(i);
 
@@ -143,7 +157,6 @@ void EepromRead() {
 				_default = 2000;
 			}
 			EEPROM.get(200 + (i * 10) + (b * 5), steptarget[i][b]);
-
 
 			if (steptarget[i][b] > 9999) steptarget[i][b] = _default;
 			//Serial.println(steptarget[i][b], DEC);
@@ -182,6 +195,11 @@ void loop() {
 		slowtimer = millis();
 		SW_exe();
 		if (effects > 0)LedEffect();
+	}
+
+	if (millis() - autotimer > 1000) {
+		autotimer = millis();
+		Auto_exe();
 	}
 }
 //DCC 
@@ -232,6 +250,9 @@ void Shift() {
 		}
 	}
 	PINB |= (1 << 0); PINB |= (1 << 0); //maak een puls op RCLK 'klok' de beide bytes in de schuif registers.
+}
+void Auto_exe() {
+	//called 1 sec from loop
 }
 void LedsAll(byte _kleur) {
 	//Zet alle 4 leds opde zelfde kleur
@@ -412,7 +433,7 @@ void LedEffect() {
 				LedsAll(0);
 				effectcount[2]++;
 				if (effectcount[2] > 4)effects = 4;
-				//EffectCountClear(); //dit werkt niet? waarom niet????
+
 			}
 		}
 		break;
@@ -495,6 +516,7 @@ void Sw_program() {
 
 		break;
 	case 1: //instellingen per stepper		
+		//instellen programfase 0
 		ledkleur[4] = 4;
 		LedsAll(7);
 		break;
@@ -561,7 +583,7 @@ void Prg_stepper(byte _knop) {
 			break;
 		case 2: //knop3: positie stepper verlagen richting home
 			if (!stepreg & (1 << 0)) { //alleen als busy bit0 is false			
-				stepdir[stepprogram] = stephome[stepprogram]; //draaien naar de home switch
+				stepdir[stepprogram] = Invert[stepprogram] & (1 << 2); //stephome[stepprogram]; //draaien naar de home switch
 				Steps(stepprogram);
 				steptarget[stepprogram][stepstand[stepprogram] - 1]--; //stepstand=0,1 of 2 0=hier niet meer mogelijk
 				effects = 100; //schakeld spoelen weer uit.
@@ -570,7 +592,16 @@ void Prg_stepper(byte _knop) {
 			break;
 		case 3://knop4: positie stepper verhogen van home vandaan
 			if (!stepreg & (1 << 0)) {
-				stepdir[stepprogram] = !stephome[stepprogram]; //draaien van de homeswitch af
+
+				//if (Invert[stepprogram] & (1 << 2)) {
+				//	stepdir[stepprogram] = false;
+				//}
+				//else {
+				//	stepdir[stepprogram] = true;
+				//}
+
+				stepdir[stepprogram] = ~Invert[stepprogram] & (1 << 2); //stephome[stepprogram]; //draaien van de homeswitch af
+
 				Steps(stepprogram);
 				steptarget[stepprogram][stepstand[stepprogram] - 1]++;
 				effects = 100;
@@ -584,7 +615,7 @@ void Prg_stepper(byte _knop) {
 		case 0:
 			programfase = 3;
 			//instellen programfase 3
-			
+
 			effects = 0;
 			EffectCountClear();
 			ledkleur[0] = 6; //paars			
@@ -603,13 +634,113 @@ void Prg_stepper(byte _knop) {
 			StepperSpeed(stepprogram);
 			break;
 		}
+		break;
 
-	case 3: //***************************instellen richtingen
+	case 3: //***************************instellen richtingen stepper
+		switch (_knop) {
+		case 0:
+			programfase = 4;
+			LedsAll(0); //alle leds uit.
+			ledkleur[0] = 5;
+			ToonAuto();
 
+
+			//EffectCountClear();
+			//effects = 3;
+			break;
+		case 1:
+			Invert[stepprogram] ^= (1 << 2);
+			break;
+		case 2:
+			Invert[stepprogram] ^= (1 << 1);
+			break;
+		case 3:
+			Invert[stepprogram] ^= (1 << 0);
+			break;
+		}
+		if (_knop > 0) ProgramfaseSet(26);
+		break;
+
+	case 4: //************************************instellingen stepper auto
+
+		switch (_knop) {
+		case 0:
+			LedsAll(0); //alle leds uit.
+			EffectCountClear();
+			effects = 3;
+			break;
+		case 1:
+			stepauto[stepprogram]++;
+			if (stepauto[stepprogram] > 2)stepauto[stepprogram] = 0;
+			ToonAuto();
+			break;
+		case 2:
+			autotimefactor[stepprogram]++;
+			if (autotimefactor[stepprogram] > 6)autotimefactor[stepprogram] = 0;
+			ToonAuto();
+			break;
+		case 3:
+			//single of in sequence auto
+			Invert[stepprogram] ^= (1 << 3);
+			ToonAuto();
+			break;
+		}
 		break;
 	}
 }
 
+void ToonAuto() {
+	//led1
+	switch (stepauto[stepprogram]) {
+	case 0: //auto off
+		ledkleur[1] = 3;
+		break;
+	case 1: //auto heen en weer
+		ledkleur[1] = 4;
+		break;
+	case 2: //alleen rood terug naar groen
+		ledkleur[1] = 1;
+		break;
+	}
+
+	if (stepauto[stepprogram] > 0) {
+		//ledkleur[2] = autotimefactor[stepprogram];
+
+		switch (autotimefactor[stepprogram]) {
+		case 0:
+			ledkleur[2] = 7;
+			break;
+		case 1:
+			ledkleur[2] = 5;
+			break;
+		case 2:
+			ledkleur[2] = 3;
+			break;
+		case 3:
+			ledkleur[2] = 6;
+			break;
+		case 4:
+			ledkleur[2] = 1;
+			break;
+		case 5:
+			ledkleur[2] = 4;
+			break;
+		case 6:
+			ledkleur[2] = 2;
+			break;			
+		}
+
+		if (Invert[stepprogram] & 1 << 3) {
+			ledkleur[3] = 6;
+		}
+		else {
+			ledkleur[3] = 4;
+		}
+	}
+	else {
+		ledkleur[2] = 0; ledkleur[3] = 0;
+	}
+}
 void Prg_Algemeen(byte _knop) {
 
 	switch (programfase) {
@@ -672,7 +803,7 @@ void Prg_Algemeen(byte _knop) {
 
 }
 void ProgramfaseSet(byte _fase) {
-
+	byte _stand = 0;
 	//set diverse led kleuren combies en instellingen op een bepaald moment in het programmeer proces.
 	switch (_fase) {
 
@@ -696,16 +827,22 @@ void ProgramfaseSet(byte _fase) {
 		scroll = false;
 		StepStart(stepprogram, 0);
 		break;
-	
-	case 26: //richtingen tonen
-		Serial.println(" case 40");
 
-		ledkleur[1] = 2; ledkleur[2] = 2; ledkleur[3] = 2;		 
+	case 26: //richtingen tonen	
+		//bit0=step, dus kleur van de led, bit1=invert het DCC command bit2=homerichting
+		for (byte i = 0; i < 3; i++) {
+			if (Invert[stepprogram] & (1 << i)) {
+				ledkleur[3 - i] = 1; //rood
+			}
+			else {
+				ledkleur[3 - i] = 2; //groen
+			}
+		}
 		break;
 
 	case 40: //instellen posities stepper**********************************
-		byte _stand = stepstand[stepprogram];
-		
+		_stand = stepstand[stepprogram];
+
 		if (_stand > 0) {
 			ledkleur[2] = 5; ledkleur[3] = 5;
 			stepreg &= ~(1 << 0); //motor niet busy
@@ -721,12 +858,13 @@ void ProgramfaseSet(byte _fase) {
 			break;
 		case 1:
 			ledkleur[1] = 2;
+			if (Invert[stepprogram & (1 << 0)])ledkleur[1] = 1;
 			break;
 		case 2:
 			ledkleur[1] = 1;
+			if (Invert[stepprogram] & (1 << 0))ledkleur[1] = 2;
 			break;
 		}
-
 		break;
 	}
 }
@@ -747,19 +885,22 @@ void StepStart(byte _stepper, byte _stand) {
 	//met lastswich bepalen of de home switch momenteel is ingedrukt, zoja dan draaien van de home switch af, anders de home switch gaan zoeken.
 	stepdoel[_stepper] = stepstand[_stepper] - 1;
 	stepfase[_stepper] = 1;
+	steppos[_stepper] = 0; //reset positie
 
 	if (lastswitch[0] & (1 << _stepper)) { //homeswitch is actief
 		StepStop(_stepper);
 	}
 	else { //homeswitch niet ingedrukt.
-		stepdir[_stepper] = stephome[_stepper]; //draairichting naar homeswitch		
+		stepdir[_stepper] = Invert[_stepper] & (1 << 2); //stephome[_stepper]; //draairichting naar homeswitch		
 	}
 
 }
 void StepStop(byte _stepper) {
 
 	if (stepfase[_stepper] == 1) { //opweg naar homeswitch
-		stepdir[_stepper] = !stephome[_stepper];
+
+		stepdir[_stepper] = !stepdir[_stepper]; //! Invert[_stepper] & (1 << 2);//! stephome[_stepper];
+
 		steppos[_stepper] = 0; //reset positie stepper
 		stepfase[_stepper] = 2;
 	}
@@ -843,7 +984,15 @@ void Steps(byte _stepper) {
 
 	Coils(_stepper);
 
-	if (stepfase[_stepper] == 2)steppos[_stepper]++;
+	steppos[_stepper]++;
+	if (stepfase[_stepper] == 1) { //richting home, auto uitschakelen als home switch wordt gemist
+		if (steppos[_stepper] > steptarget[_stepper][0] + steptarget[_stepper][1] + 200) {
+			//LedsAll(1);
+			stepfase[_stepper] = 0; CoilsUit(_stepper);
+		}
+	}
+
+	//if (stepfase[_stepper] == 2)steppos[_stepper]++;
 }
 
 void Coils(byte _stepper) {

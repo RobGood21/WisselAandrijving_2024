@@ -38,12 +38,10 @@ NmraDcc  Dcc;
 const byte aantalkleuren = 7;
 const byte aantaleffectcounts = 4;
 
-
-
-
 //variables
 unsigned int DCCadres = 1; //default=1;
 byte Invert[4];   //bit0=step, dus kleur van de led, bit1=invert het DCC command bit2=homerichting bit 3=auto sequence of auto single
+byte memreg; //bito= auto uit false, auto aan =true
 byte stepreg; //8xbool bit0 (true)=busy, motor draait naar andere positie
 byte shiftbyte[3];
 unsigned long slowtimer;
@@ -81,7 +79,9 @@ byte steppercount;
 byte stepprogram; //welke stepper wordt er ingesteld
 
 byte stepauto[4]; //auto step type 0=uit 1=heen en weer 2= alleen weer
+
 byte autotimefactor[4]; //bepaald de wacht tijd van het autoeffect
+unsigned int autotime[4]; //tijd in seconden
 //sequence of single is Invert bit3
 unsigned long autotimer; //timer van 1 seconde
 unsigned int autocounter[4]; //tellers voor de wachttijden
@@ -118,17 +118,17 @@ void Eeprom_write() {
 
 	for (byte i = 0; i < 4; i++) { //instellingen opslaan per stepper
 
+		EEPROM.update(1, memreg);
+		EEPROM.update(10 + i, speedfactor[i]);
 		EEPROM.update(15 + i, Invert[i]);
 		EEPROM.update(20 + i, stepauto[i]);
 		EEPROM.update(25 + i, autotimefactor[i]);
 		EEPROM.put(200 + (i * 10) + 5, steptarget[i][1]);
 
-		EEPROM.update(10 + i, speedfactor[i]);
-
-
 	}
 }
 void EepromRead() {
+	memreg=EEPROM.read(1);
 	EEPROM.get(100, DCCadres);
 	if (DCCadres > 512)DCCadres = 1;
 
@@ -180,7 +180,7 @@ void INIT() {
 	programtype = 0;
 	programfase = 0;
 
-
+	autofocus = 10; //start auto cyclus
 }
 void loop() {
 	Dcc.process();
@@ -252,7 +252,125 @@ void Shift() {
 	PINB |= (1 << 0); PINB |= (1 << 0); //maak een puls op RCLK 'klok' de beide bytes in de schuif registers.
 }
 void Auto_exe() {
+	byte _wd = 0;
+
+
 	//called 1 sec from loop
+	// stepauto type 0=uit(blauw) 1=heen en weer(geel) 2= alleen weer(rood)
+	//invert bit 3 false = single(geel), true = in sequence van een stepper(paars)
+	//autotimefactor wit=random~ lichtblauw, kort~groen = maximale lengte
+	//autocounter is teller voor de tijden
+
+	//sequence
+	bool _sequence;
+	bool _found = false;
+
+	if (autofocus == 10) { //geen stepper heeft de focus, bij start
+		for (byte _f = 0; _f < 4; _f++) {
+			_sequence = false;
+			if (Invert[_f] & (1 << 3)) _sequence = true;
+			if (stepauto[_f] > 0 && _sequence == true) { //auto stepper bepaald
+
+				autofocus = _f;
+				AutoTime(autofocus); 			//zet de autotime voor deze stepper
+				autocounter[autofocus] == 0; //reset teller
+				break;
+			}
+		}
+	}
+	else
+	{
+		//er is/zijn steppers op sequence gevonden
+		autocounter[autofocus]++; //wachttijd aftellen			
+
+		if (autocounter[autofocus] == autotime[autofocus]) { //tijd afgelopen
+			//Serial.print("velopen tijd: "); Serial.print(autotime[autofocus]);
+			//Serial.print("   Stepper sequence  actie: "); Serial.println(autofocus);
+			AutoActie(autofocus);
+
+
+			//volgende stepper in sequence mode zoeken
+			while (_found == false) {
+				_wd++;
+				if (_wd > 10) {
+					Serial.println("watchdog");
+					LedsAll(1); //zet alle leds rood
+					return;
+				}
+
+				autofocus++;
+				if (autofocus > 3)autofocus = 0;
+
+				_sequence = false;
+				if (Invert[autofocus] & (1 << 3))_sequence = true;
+
+				if (stepauto[autofocus] > 0 && _sequence == true) {
+					AutoTime(autofocus);
+					autocounter[autofocus] = 0;
+					_found = true;
+				}
+			}
+		}
+	}
+
+	//singles
+
+	for (byte i = 0; i < 4; i++) { //Alle steppers bekijken
+
+		_sequence = false;
+		if (Invert[i] & (1 << 3))_sequence = true;
+
+		if (_sequence == false && stepauto[i] > 0) { //deze stepper gaat dus in de automaat
+			//Serial.println("jo, hier");
+
+			AutoTime(i); //bepaal de tijd voor deze stepper, in runtime zodat tijdens programmeren de tijd kan worden gezien
+			autocounter[i]++;
+			if (autocounter[i] == autotime[i]) { //tijd verlopen
+				autocounter[i] = 0;
+				//Serial.print("verlopen tijd: "); Serial.print(autotime[i]);
+				//Serial.print("   Stepper single  actie: "); Serial.println(i);
+				AutoActie(i);
+			}
+		}
+	}
+}
+
+void AutoActie(byte _stepper) {
+	Serial.println(_stepper);
+	switch (stepauto[_stepper]) {
+	case 1:
+		break;
+	case 2:
+		break;
+	}
+}
+
+void AutoTime(byte _stepper) {
+	byte _t = 0;
+	switch (autotimefactor[_stepper]) {
+	case 0:
+		_t = random(2, 30);
+		break;
+	case 1:
+		_t = 2;
+		break;
+	case 2:
+		_t = 4;
+		break;
+	case 3:
+		_t = 10;
+		break;
+	case 4:
+		_t = 25;
+		break;
+	case 5:
+		_t = 60;
+		break;
+	case 6:
+		_t = 120;
+		break;
+	}
+	autotime[_stepper] = _t;
 }
 void LedsAll(byte _kleur) {
 	//Zet alle 4 leds opde zelfde kleur
@@ -727,7 +845,7 @@ void ToonAuto() {
 			break;
 		case 6:
 			ledkleur[2] = 2;
-			break;			
+			break;
 		}
 
 		if (Invert[stepprogram] & 1 << 3) {
@@ -744,37 +862,30 @@ void ToonAuto() {
 void Prg_Algemeen(byte _knop) {
 
 	switch (programfase) {
-		//***************************programtype algemeen programfase DCC adres instellen
+		//***************************programtype algemeen programfase 0 DCC adres instellen
 	case 0: //DCC adres instellen
 		switch (_knop) {
 		case 0: //knop 1: volgende programmeer fase instellen
 			programfase = 1;
-			ProgramfaseSet(21); //2x10+programfase
+			ProgramfaseSet(21); 
 			break;
 
 		case 1:  // knop 2: start ingestelde programmeerfase
 			effects = 1;			//bit 0 true
 			break;
-
-		case 2:
-			break;
-
-		case 3:
-			break;
 		}
 		break;
+
 		//***************************programtype algemeen programfase 1
-	case 1:  //programfase 1: instellen DCCadres
+	case 1:  //programfase 1: auto aan of uit
 		switch (_knop) {
 		case 0: //knop: 1
 			programfase = 2;
 			ProgramfaseSet(22);
 			break;
 		case 1: //knop 2
-			break;
-		case 2: //knop 3
-			break;
-		case 3: //knop 4
+			memreg ^= (1 << 0);
+			ProgramfaseSet(21);
 			break;
 		}
 		break;
@@ -813,7 +924,13 @@ void ProgramfaseSet(byte _fase) {
 		break;
 
 	case 21:
-		ledkleur[0] = 4; ledkleur[1] = 0; ledkleur[2] = 0; ledkleur[3] = 0;
+		if (memreg & (1 << 0)) {
+			ledkleur[1] = 2;
+		}
+		else {
+
+			ledkleur[1]=1;
+		}
 		break;
 
 	case 22: //factory reset instellen

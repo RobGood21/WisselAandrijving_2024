@@ -41,7 +41,7 @@ const byte aantaleffectcounts = 4;
 //variables
 unsigned int DCCadres = 1; //default=1;
 byte Invert[4];   //bit0=step, dus kleur van de led, bit1=invert het DCC command bit2=homerichting bit 3=auto sequence of auto single
-byte memreg; //bito= auto uit false, auto aan =true
+byte memreg; //bito= auto uit false, auto aan =true;  bit1 false bezet als bezet, true bezets als decoder uitgang(default)
 byte stepreg; //8xbool bit0 (true)=busy, motor draait naar andere positie
 byte shiftbyte[3];
 unsigned long slowtimer;
@@ -128,7 +128,7 @@ void Eeprom_write() {
 	}
 }
 void EepromRead() {
-	memreg=EEPROM.read(1);
+	memreg = EEPROM.read(1);
 	EEPROM.get(100, DCCadres);
 	if (DCCadres > 512)DCCadres = 1;
 
@@ -197,10 +197,13 @@ void loop() {
 		if (effects > 0)LedEffect();
 	}
 
-	if (millis() - autotimer > 1000) {
-		autotimer = millis();
-		Auto_exe();
+	if (memreg & (1 << 0)) { //Auto enabled (false is uit, geen automatische processen)
+		if (millis() - autotimer > 1000) {
+			autotimer = millis();
+			Auto_exe();
+		}
 	}
+
 }
 //DCC 
 void notifyDccAccTurnoutBoard(uint16_t BoardAddr, uint8_t OutputPair, uint8_t Direction, uint8_t OutputPower) {
@@ -218,12 +221,12 @@ void notifyDccAccTurnoutBoard(uint16_t BoardAddr, uint8_t OutputPair, uint8_t Di
 
 	if (programtype == 0 && DCCadres == BoardAddr) { //alleen tijdens in bedrijf
 
-		//eventueel inverted op het DCC command
+		//eventueel inverted op het DCC command, en alleen als de stand  is veranderd
 		if (Invert[OutputPair & (1 << 1)]) {
-			StepStart(OutputPair, (1 - Direction) + 1);
+			if(stepstand[OutputPair]!=(1-Direction)+1)StepStart(OutputPair, (1 - Direction) + 1);
 		}
 		else {
-			StepStart(OutputPair, Direction + 1);
+			if(stepstand[OutputPair]!=(Direction +1))	StepStart(OutputPair, Direction + 1);
 		}
 	}
 }
@@ -253,15 +256,12 @@ void Shift() {
 }
 void Auto_exe() {
 	byte _wd = 0;
-
-
 	//called 1 sec from loop
 	// stepauto type 0=uit(blauw) 1=heen en weer(geel) 2= alleen weer(rood)
 	//invert bit 3 false = single(geel), true = in sequence van een stepper(paars)
 	//autotimefactor wit=random~ lichtblauw, kort~groen = maximale lengte
 	//autocounter is teller voor de tijden
-
-	//sequence
+		//sequence
 	bool _sequence;
 	bool _found = false;
 
@@ -337,10 +337,12 @@ void Auto_exe() {
 
 void AutoActie(byte _stepper) {
 	Serial.println(_stepper);
-	switch (stepauto[_stepper]) {
-	case 1:
+	switch (stepauto[_stepper]) { //0=niks(blauw) 1=heen en weer(geel) 2=alleen van rood af (rood)
+	case 1:  //heen en weer
+		StepStart(_stepper,0);
 		break;
-	case 2:
+	case 2: //alleen van rood terug
+		if (stepstand[_stepper] == 2)StepStart(_stepper, 1);
 		break;
 	}
 }
@@ -348,26 +350,26 @@ void AutoActie(byte _stepper) {
 void AutoTime(byte _stepper) {
 	byte _t = 0;
 	switch (autotimefactor[_stepper]) {
-	case 0:
-		_t = random(2, 30);
+	case 0: //wit
+		_t = random(10, 60);
 		break;
-	case 1:
-		_t = 2;
+	case 1:  //lichtblauw
+		_t = 5;
 		break;
-	case 2:
-		_t = 4;
+	case 2://blauw
+		_t = 15;
 		break;
-	case 3:
-		_t = 10;
+	case 3://paars
+		_t = 30;
 		break;
-	case 4:
-		_t = 25;
-		break;
-	case 5:
+	case 4://rood
 		_t = 60;
 		break;
-	case 6:
+	case 5://geel
 		_t = 120;
+		break;
+	case 6://groen
+		_t = 300;
 		break;
 	}
 	autotime[_stepper] = _t;
@@ -647,10 +649,22 @@ void Sw_program() {
 	}
 }
 void Sw_knop(byte _knop) {
+	
 	switch (programtype) {
 
 	case 0: //in bedrijf
+		// _knop = hier de stepper
+		if (stepauto[_knop] == 2) { 
+			//knop verzet stepper alleen van 1 naar 2, en alleen als de stepper in stand 1 staat
+			autocounter[_knop] = 0;
+			if (stepstand[_knop] < 2) {
+			StepStart(_knop, 2);
+			}
+	
+		}
+		else {
 		StepStart(_knop, 0);
+		}
 		break;
 
 	case 1: //instellingen per stepper
@@ -867,7 +881,7 @@ void Prg_Algemeen(byte _knop) {
 		switch (_knop) {
 		case 0: //knop 1: volgende programmeer fase instellen
 			programfase = 1;
-			ProgramfaseSet(21); 
+			ProgramfaseSet(21);
 			break;
 
 		case 1:  // knop 2: start ingestelde programmeerfase
@@ -877,14 +891,18 @@ void Prg_Algemeen(byte _knop) {
 		break;
 
 		//***************************programtype algemeen programfase 1
-	case 1:  //programfase 1: auto aan of uit
+	case 1:  //programfase 1: enkele booleans uit memreg
 		switch (_knop) {
 		case 0: //knop: 1
 			programfase = 2;
 			ProgramfaseSet(22);
 			break;
-		case 1: //knop 2
+		case 1: //knop 2: Auto functie steppers aan of uit 
 			memreg ^= (1 << 0);
+			ProgramfaseSet(21);  
+			break;
+		case 2: //knop 3: Bezet outputs als bezet(false),  of extra 4 DCC decoder outputs (default)(true)
+			memreg ^= (1 << 1);
 			ProgramfaseSet(21);
 			break;
 		}
@@ -923,13 +941,20 @@ void ProgramfaseSet(byte _fase) {
 		ledkleur[0] = 6; ledkleur[1] = 1; ledkleur[2] = 0; ledkleur[3] = 0;
 		break;
 
-	case 21:
+	case 21: //algemeen program, enkele booleans in memreg  bit0=auto onoff bit 1=bezetuitputs
 		if (memreg & (1 << 0)) {
 			ledkleur[1] = 2;
 		}
 		else {
 
-			ledkleur[1]=1;
+			ledkleur[1] = 1;
+		}
+
+		if (memreg & (1 << 1)) { //bezetoutputs
+			ledkleur[2] = 4; //(geel) dcc decoder
+		}
+		else {
+			ledkleur[2] = 6; //(paars) bezetgeven
 		}
 		break;
 
@@ -1010,7 +1035,6 @@ void StepStart(byte _stepper, byte _stand) {
 	else { //homeswitch niet ingedrukt.
 		stepdir[_stepper] = Invert[_stepper] & (1 << 2); //stephome[_stepper]; //draairichting naar homeswitch		
 	}
-
 }
 void StepStop(byte _stepper) {
 

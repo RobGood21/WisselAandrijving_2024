@@ -87,8 +87,6 @@ unsigned long autotimer; //timer van 1 seconde
 unsigned int autocounter[4]; //tellers voor de wachttijden
 byte autofocus; //welke van de 4 steppers heeft de focus in de sequence mode
 
-
-
 void setup() {
 	Serial.begin(9600);
 
@@ -105,13 +103,11 @@ void setup() {
 	EepromRead();
 	INIT();
 }
-void Factory() {
-
-	Serial.println("factory");
+void Factory() { //resets eeprom memorie naar 0xFF	
 	for (int i = 0; i < EEPROM.length(); i++) {
 		EEPROM.update(i, 0xFF);
 	}
-	setup();
+	setup(); 
 }
 void Eeprom_write() {
 	EEPROM.put(100, DCCadres);
@@ -151,15 +147,13 @@ void EepromRead() {
 		for (byte b = 0; b < 2; b++) {
 			unsigned int _default;
 			if (b == 0) {
-				_default = 200;
+				_default = 50;
 			}
 			else {
-				_default = 2000;
+				_default = 600;
 			}
 			EEPROM.get(200 + (i * 10) + (b * 5), steptarget[i][b]);
-
 			if (steptarget[i][b] > 9999) steptarget[i][b] = _default;
-			//Serial.println(steptarget[i][b], DEC);
 		}
 	}
 }
@@ -223,10 +217,49 @@ void notifyDccAccTurnoutBoard(uint16_t BoardAddr, uint8_t OutputPair, uint8_t Di
 
 		//eventueel inverted op het DCC command, en alleen als de stand  is veranderd
 		if (Invert[OutputPair & (1 << 1)]) {
-			if(stepstand[OutputPair]!=(1-Direction)+1)StepStart(OutputPair, (1 - Direction) + 1);
+			if (stepstand[OutputPair] != (1 - Direction) + 1)StepStart(OutputPair, (1 - Direction) + 1);
 		}
 		else {
-			if(stepstand[OutputPair]!=(Direction +1))	StepStart(OutputPair, Direction + 1);
+			if (stepstand[OutputPair] != (Direction + 1))	StepStart(OutputPair, Direction + 1);
+		}
+	}
+
+	else if (programtype == 0 && (DCCadres + 1) == BoardAddr) { //in bedrijf; adres =1 en outputs op decoder
+		if (memreg & 1 << 1) { //als outputs bezet op decoder staan
+			switch (OutputPair) {
+			case 0: //bezet 1 pin = pin12 (portb4)
+				if (Direction == 1) {
+					PORTB |= (1 << 4);
+				}
+				else {
+					PORTB &= ~(1 << 4);
+				}
+				break;
+			case 1://bezet 2 pin 11 (port B3)
+				if (Direction == 1) {
+					PORTB |= (1 << 3);
+				}
+				else {
+					PORTB &= ~(1 << 3);
+				}
+				break;
+			case 2: //bezet 3 pin 5 (port D5)
+				if (Direction == 1) {
+					PORTD |= (1 << 5);
+				}
+				else {
+					PORTD &= ~(1 << 5);
+				}
+				break;
+			case 3: //bezet 4 pin 4 (port D4)
+				if (Direction == 1) {
+					PORTD |= (1 << 4);
+				}
+				else {
+					PORTD &= ~(1 << 4);
+				}
+				break;
+			}
 		}
 	}
 }
@@ -288,12 +321,11 @@ void Auto_exe() {
 			//Serial.print("   Stepper sequence  actie: "); Serial.println(autofocus);
 			AutoActie(autofocus);
 
-
 			//volgende stepper in sequence mode zoeken
 			while (_found == false) {
 				_wd++;
 				if (_wd > 10) {
-					Serial.println("watchdog");
+					//Serial.println("watchdog");
 					LedsAll(1); //zet alle leds rood
 					return;
 				}
@@ -321,14 +353,11 @@ void Auto_exe() {
 		if (Invert[i] & (1 << 3))_sequence = true;
 
 		if (_sequence == false && stepauto[i] > 0) { //deze stepper gaat dus in de automaat
-			//Serial.println("jo, hier");
 
 			AutoTime(i); //bepaal de tijd voor deze stepper, in runtime zodat tijdens programmeren de tijd kan worden gezien
 			autocounter[i]++;
 			if (autocounter[i] == autotime[i]) { //tijd verlopen
 				autocounter[i] = 0;
-				//Serial.print("verlopen tijd: "); Serial.print(autotime[i]);
-				//Serial.print("   Stepper single  actie: "); Serial.println(i);
 				AutoActie(i);
 			}
 		}
@@ -336,10 +365,9 @@ void Auto_exe() {
 }
 
 void AutoActie(byte _stepper) {
-	Serial.println(_stepper);
 	switch (stepauto[_stepper]) { //0=niks(blauw) 1=heen en weer(geel) 2=alleen van rood af (rood)
 	case 1:  //heen en weer
-		StepStart(_stepper,0);
+		StepStart(_stepper, 0);
 		break;
 	case 2: //alleen van rood terug
 		if (stepstand[_stepper] == 2)StepStart(_stepper, 1);
@@ -426,9 +454,6 @@ void SW_exe() {
 		byte _switch = i + (4 * sws);
 
 		if (_changed & (1 << i)) {
-
-			//Serial.println(lastswitch[sws]);
-
 
 			if (_stand & (1 << i)) { //alleen indrukken van de knoppen iets mee doen
 				SWon(_switch);
@@ -522,7 +547,7 @@ void SWoff(byte _sw) {
 }
 
 void StepperSpeed(byte _stepper) {
-	if (speedfactor[_stepper] > 200)speedfactor[_stepper] = 12;
+	if (speedfactor[_stepper] > 200)speedfactor[_stepper] = 25;
 	speed[_stepper] = 800 + (speedfactor[_stepper] * 100);   //tijdelijk deze waardes nog verder bepalen. nu default dus 600ms
 }
 void LedEffect() {
@@ -649,21 +674,21 @@ void Sw_program() {
 	}
 }
 void Sw_knop(byte _knop) {
-	
+
 	switch (programtype) {
 
 	case 0: //in bedrijf
 		// _knop = hier de stepper
-		if (stepauto[_knop] == 2) { 
+		if (stepauto[_knop] == 2) {
 			//knop verzet stepper alleen van 1 naar 2, en alleen als de stepper in stand 1 staat
 			autocounter[_knop] = 0;
 			if (stepstand[_knop] < 2) {
-			StepStart(_knop, 2);
+				StepStart(_knop, 2);
 			}
-	
+
 		}
 		else {
-		StepStart(_knop, 0);
+			StepStart(_knop, 0);
 		}
 		break;
 
@@ -899,7 +924,7 @@ void Prg_Algemeen(byte _knop) {
 			break;
 		case 1: //knop 2: Auto functie steppers aan of uit 
 			memreg ^= (1 << 0);
-			ProgramfaseSet(21);  
+			ProgramfaseSet(21);
 			break;
 		case 2: //knop 3: Bezet outputs als bezet(false),  of extra 4 DCC decoder outputs (default)(true)
 			memreg ^= (1 << 1);
@@ -1013,9 +1038,11 @@ void ProgramfaseSet(byte _fase) {
 
 void StepStart(byte _stepper, byte _stand) {
 	//start beweging van de stepper	
-	if (programtype == 0) ledkleur[_stepper] = 3; //alleen als in bedrijf
-	//bepaal eindbestemming, hier nog iets doen met de switch mode, moment of aan/uit	
-
+	if (programtype == 0) { //alleen als in bedrijf
+		ledkleur[_stepper] = 3;
+		Bezet(_stepper, true);
+		//bepaal eindbestemming, hier nog iets doen met de switch mode, moment of aan/uit	
+	}
 	if (_stand == 0) {
 		stepstand[_stepper]++;
 		if (stepstand[_stepper] > 2)stepstand[_stepper] = 1; //0>1 1>2 2>1	
@@ -1046,6 +1073,46 @@ void StepStop(byte _stepper) {
 		stepfase[_stepper] = 2;
 	}
 }
+void Bezet(byte _stepper, bool _bezet) {
+	switch (_stepper) {
+	case 0:  //bezet 1 portb4
+		if (_bezet) {
+			PORTB |= (1 << 4);
+		}
+		else {
+			PORTB &= ~(1 << 4);
+		}
+		break;
+	case 1: //bezet 2 portb3
+		if (_bezet) {
+			PORTB |= (1 << 3);
+		}
+		else {
+			PORTB &= ~(1 << 3);
+		}
+		break;
+	case 2: //bezet 3 portd5
+		if (_bezet) {
+			PORTD |= (1 << 5);
+		}
+		else {
+			PORTD &= ~(1 << 5);
+		}
+
+
+		break;
+	case 3: //bezet 4 port d4
+		if (_bezet) {
+			PORTD |= (1 << 4);
+		}
+		else {
+			PORTD &= ~(1 << 4);
+		}
+		break;
+	}
+
+
+}
 void Stepper_exe() {
 	for (byte i = 0; i < 4; i++) { //om de beurt de 4 steppers
 
@@ -1070,6 +1137,7 @@ void Stepper_exe() {
 			case 3: //doel bereikt wachttijd, daarna spoelen uit
 				if (millis() - coilsuitcount[i] > 500) {
 					CoilsUit(i);
+	
 					stepfase[i] = 0; //ruststand
 					switch (programtype) {
 					case 0: //in bedrijf
@@ -1086,12 +1154,9 @@ void Stepper_exe() {
 							break;
 						}
 						break;
-
-
-					case 2: //******************algemene instellingen
-						break;
 					}
 				}
+
 				break;
 			}
 		}
@@ -1112,6 +1177,7 @@ void CoilsUit(byte _stepper) {
 		shiftbyte[1] &= ~(B11110000 << 0);
 		break;
 	}
+	Bezet(_stepper, false);
 }
 void Steps(byte _stepper) {
 	if (stepdir[_stepper]) { //richting homeswitch

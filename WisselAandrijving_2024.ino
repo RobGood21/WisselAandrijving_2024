@@ -107,7 +107,7 @@ void Factory() { //resets eeprom memorie naar 0xFF
 	for (int i = 0; i < EEPROM.length(); i++) {
 		EEPROM.update(i, 0xFF);
 	}
-	setup(); 
+	setup();
 }
 void Eeprom_write() {
 	EEPROM.put(100, DCCadres);
@@ -119,6 +119,7 @@ void Eeprom_write() {
 		EEPROM.update(15 + i, Invert[i]);
 		EEPROM.update(20 + i, stepauto[i]);
 		EEPROM.update(25 + i, autotimefactor[i]);
+		EEPROM.put(200 + (i * 10), steptarget[i][0]);
 		EEPROM.put(200 + (i * 10) + 5, steptarget[i][1]);
 
 	}
@@ -551,6 +552,7 @@ void StepperSpeed(byte _stepper) {
 	speed[_stepper] = 800 + (speedfactor[_stepper] * 100);   //tijdelijk deze waardes nog verder bepalen. nu default dus 600ms
 }
 void LedEffect() {
+
 	switch (effects) {
 	case 1: //Wacht op DCC adres om in te stellen
 
@@ -610,10 +612,20 @@ void LedEffect() {
 		}
 		break;
 
+	case 10:
+		effectcount[3]++;
+		if (effectcount[3] > 20) {
+			effectcount[3] = 0;
+			effects = 0;
+			CoilsUit(stepprogram);
+		}
+		break;
+
 	case 50: //Factory reset knipper effect op led 4 
 		effectcount[0] = 0;
 		effects = 51;
 		break;
+
 	case 51:
 		byte _led = 3;
 		effectcount[0]++;
@@ -624,22 +636,12 @@ void LedEffect() {
 			if (stepreg & (1 << 3)) { //extra confirmation if true door naar factory reset, false wissel led
 				_led = 2;
 			}
-
 			if (stepreg & (1 << 2)) {
 				ledkleur[_led] = 1;
 			}
 			else {
 				ledkleur[_led] = 4;
 			}
-		}
-		break;
-
-	case 100:
-		effectcount[3]++;
-		if (effectcount[3] > 40) {
-			effectcount == 0;
-			effects = 0;
-			CoilsUit(stepprogram);
 		}
 		break;
 	}
@@ -743,8 +745,10 @@ void Prg_stepper(byte _knop) {
 				stepdir[stepprogram] = Invert[stepprogram] & (1 << 2); //stephome[stepprogram]; //draaien naar de home switch
 				Steps(stepprogram);
 				steptarget[stepprogram][stepstand[stepprogram] - 1]--; //stepstand=0,1 of 2 0=hier niet meer mogelijk
-				effects = 100; //schakeld spoelen weer uit.
+
 				effectcount[3] = 0;
+				effects = 10; //schakeld spoelen weer uit.
+
 			}
 			break;
 		case 3://knop4: positie stepper verhogen van home vandaan
@@ -761,8 +765,10 @@ void Prg_stepper(byte _knop) {
 
 				Steps(stepprogram);
 				steptarget[stepprogram][stepstand[stepprogram] - 1]++;
-				effects = 100;
+
+				effects = 10;
 				effectcount[3] = 0;
+
 			}
 			break;
 		}
@@ -1137,7 +1143,7 @@ void Stepper_exe() {
 			case 3: //doel bereikt wachttijd, daarna spoelen uit
 				if (millis() - coilsuitcount[i] > 500) {
 					CoilsUit(i);
-	
+
 					stepfase[i] = 0; //ruststand
 					switch (programtype) {
 					case 0: //in bedrijf

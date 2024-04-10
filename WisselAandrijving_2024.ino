@@ -1080,6 +1080,8 @@ void StepStop(byte _stepper) {
 	}
 }
 void Bezet(byte _stepper, bool _bezet) {
+	if (memreg & (1 << 1))return;  //bezet outputs in decoder stand
+
 	switch (_stepper) {
 	case 0:  //bezet 1 portb4
 		if (_bezet) {
